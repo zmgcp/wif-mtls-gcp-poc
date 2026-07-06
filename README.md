@@ -1,6 +1,6 @@
 # Google Cloud Workload Identity Federation (WIF) with X.509 Certificates (GA)
 
-An enterprise-grade, complete proof-of-concept (PoC) demonstrating how to use **Google Cloud's General Availability (GA) Workload Identity Federation with X.509 Certificates** (`create-x509` provider type).
+An enterprise-grade, complete proof-of-concept (PoC) demonstrating how to use **Google Cloud Workload Identity Federation with X.509 Certificates** (`create-x509` provider type).
 
 This repository implements the native architectural pattern established by **Google Cloud IAM**, allowing workloads (on-premises servers, edge devices, or third-party clouds) to securely authenticate directly to Google Cloud using mTLS X.509 client certificates without storing static JSON service account keys, without custom token brokers, and without hosting public OIDC discovery endpoints.
 
