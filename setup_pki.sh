@@ -84,6 +84,15 @@ chmod 600 "${CERTS_DIR}/client.key"
 chmod 644 "${CERTS_DIR}/client.pem"
 rm -f "${CERTS_DIR}/client.csr" "${CERTS_DIR}/client_ext.cnf" "${CERTS_DIR}/rootCA.srl"
 
+# Format rootCA.pem with 6-space indentation for YAML trust store specification
+ROOT_CERT_INDENTED=$(sed 's/^/      /' "${CERTS_DIR}/rootCA.pem")
+cat <<EOF > "${CERTS_DIR}/trust_store.yaml"
+trustStore:
+  trustAnchors:
+  - pemCertificate: |
+${ROOT_CERT_INDENTED}
+EOF
+
 # Copy Root CA and server certs to broker directory for container packaging & local dev
 echo "Copying rootCA.pem, server.pem, and server.key to ${BROKER_DIR}..."
 cp "${CERTS_DIR}/rootCA.pem" "${BROKER_DIR}/rootCA.pem"

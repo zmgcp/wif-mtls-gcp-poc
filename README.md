@@ -1,66 +1,51 @@
-# Google Cloud Workload Identity Federation (WIF) mTLS X.509 Authentication Demo
+# Google Cloud Workload Identity Federation (WIF) with X.509 Certificates (GA)
 
-An enterprise-grade, complete proof-of-concept (PoC) demonstrating how to broker **X.509 Certificate Authentication over Mutual TLS (mTLS)** into **Google Cloud Workload Identity Federation (WIF)**. 
+An enterprise-grade, complete proof-of-concept (PoC) demonstrating how to use **Google Cloud's General Availability (GA) Workload Identity Federation with X.509 Certificates** (`create-x509` provider type).
 
-This repository implements the architectural pattern established by **Google Cloud Solutions Architects**, enabling external workloads (on-premises servers, edge devices, or third-party clouds) to securely access Google Cloud resources without storing static, long-lived service account JSON keys.
+This repository implements the native architectural pattern established by **Google Cloud IAM**, allowing workloads (on-premises servers, edge devices, or third-party clouds) to securely authenticate directly to Google Cloud using mTLS X.509 client certificates without storing static JSON service account keys, without custom token brokers, and without hosting public OIDC discovery endpoints.
 
 ---
 
 ## 🏛️ Architecture Overview
 
-The authentication pipeline eliminates static credentials by establishing a cryptographic trust chain from an on-premises Root CA to Google Cloud IAM:
+In GA Workload Identity Federation with X.509 certificates, Google Security Token Service (STS) natively terminates mutual TLS (mTLS) and validates X.509 client certificates against a trust store (`trust_store.yaml`) stored directly in Google Cloud IAM:
 
 ```
-+-------------------+           +-----------------------+           +-----------------------+           +-----------------------+
-|  External Client  |           |   mTLS Token Broker   |           |  Google Security Token|           | Google Cloud Storage  |
-|   (client-01)     |           |     (Cloud Run)       |           |      Service (STS)    |           |     (Target Bucket)   |
-+---------+---------+           +-----------+-----------+           +-----------+-----------+           +-----------+-----------+
-          |                                 |                                   |                                   |
-          | 1. mTLS POST /token             |                                   |                                   |
-          |    (presents client.pem)        |                                   |                                   |
-          |-------------------------------->|                                   |                                   |
-          |                                 | 2. Cryptographic Cert Validation  |                                   |
-          |                                 |    Extract CN ('client-01')       |                                   |
-          |                                 |    Call IAM signJwt (Keyless)     |                                   |
-          |                                 |--+                                |                                   |
-          |                                 |  |                                |                                   |
-          |                                 |<-+                                |                                   |
-          | 3. Return OIDC ID Token         |                                   |                                   |
-          |    (iss: Broker, sub: client-01)|                                   |                                   |
-          |<--------------------------------|                                   |                                   |
-          |                                                                     |                                   |
-          | 4. POST https://sts.googleapis.com/v1/token                         |                                   |
-          |    (subject_token: OIDC ID Token)                                   |                                   |
-          |-------------------------------------------------------------------->|                                   |
-          |                                                                     | 5. GET /.well-known/jwks.json     |
-          |                                                                     |    (Proxy SA JWKS from GCP IAM)   |
-          |                                                                     |---------------------------------->|
-          |                                                                     |                                   |
-          |                                                                     | 6. Verify Signature & WIF Rule    |
-          |                                                                     |    (assertion.sub == 'client-01') |
-          |                                                                     |--+                                |
-          |                                                                     |  |                                |
-          |                                                                     |<-+                                |
-          | 7. Return GCP Federated Access Token                                |                                   |
-          |<--------------------------------------------------------------------|                                   |
-          |                                                                                                         |
-          | 8. POST https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/TARGET_SA:generateAccessToken
-          |    (auth: Bearer Federated Access Token)                                                                |
-          |-------------------------------------------------------------------------------------------------------->|
-          | 9. Return GCP OAuth 2.0 Access Token for Target SA                                                      |
-          |<--------------------------------------------------------------------------------------------------------|
-          |                                                                                                         |
-          | 10. GET https://storage.googleapis.com/storage/v1/b/BUCKET_NAME/o                                       |
-          |     (auth: Bearer Impersonated OAuth Token)                                                             |
-          |-------------------------------------------------------------------------------------------------------->|
-          | 11. Return 200 OK (List of GCS Bucket Objects)                                                          |
-          |<--------------------------------------------------------------------------------------------------------|
++-------------------+                                  +-----------------------+           +-----------------------+
+|  External Client  |                                  |  Google Security Token|           | Google Cloud Storage  |
+|   (client-01)     |                                  |      Service (STS)    |           |     (Target Bucket)   |
++---------+---------+                                  +-----------+-----------+           +-----------+-----------+
+          |                                                        |                                   |
+          | 1. mTLS POST https://sts.googleapis.com/v1/token       |                                   |
+          |    (presents client.pem & client.key over mTLS)        |                                   |
+          |------------------------------------------------------->|                                   |
+          |                                                        | 2. Verify X.509 Cert against      |
+          |                                                        |    trust_store.yaml in IAM        |
+          |                                                        |    Extract CN ('client-01')       |
+          |                                                        |    Check WIF Rule & Condition     |
+          |                                                        |--+                                |
+          |                                                        |  |                                |
+          |                                                        |<-+                                |
+          | 3. Return GCP Federated Access Token                   |                                   |
+          |<-------------------------------------------------------|                                   |
+          |                                                                                            |
+          | 4. POST https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/TARGET_SA:generateAccessToken
+          |    (auth: Bearer Federated Access Token)                                                   |
+          |------------------------------------------------------------------------------------------->|
+          | 5. Return GCP OAuth 2.0 Access Token for Target SA                                         |
+          |<-------------------------------------------------------------------------------------------|
+          |                                                                                            |
+          | 6. GET https://storage.googleapis.com/storage/v1/b/BUCKET_NAME/o                           |
+          |    (auth: Bearer Impersonated OAuth Token)                                                 |
+          |------------------------------------------------------------------------------------------->|
+          | 7. Return 200 OK (List of GCS Bucket Objects)                                              |
+          |<-------------------------------------------------------------------------------------------|
 ```
 
 ### Key Architectural Highlights
-1. **Keyless OIDC Token Signing (`signJwt`)**: The Cloud Run token broker does not store any private signing keys in memory, disk, or environment variables. Instead, it delegates JWT signing to the Google Cloud IAM Credentials API (`iamcredentials.projects.serviceAccounts.signJwt`), leveraging Google-managed ephemeral keys.
-2. **JWKS Proxying**: To allow Google STS to verify the signature of tokens signed by `signJwt`, the broker's `/.well-known/jwks.json` endpoint proxies the public JSON Web Key Set (JWKS) published by Google for the broker's attached Service Account (`https://www.googleapis.com/service_accounts/v1/jwk/{service_account_email}`).
-3. **Strict Attribute Mapping & RBAC**: In Workload Identity Federation, the token's `sub` claim (derived from the X.509 certificate's Common Name) is mapped to `google.subject`. An IAM policy binding restricts access exclusively to `principal://.../subject/client-01`.
+1. **Native X.509 Trust Store**: You do not need a custom token broker or Cloud Run service. You upload a `trust_store.yaml` containing your Root CA directly to the Workload Identity Pool X.509 Provider (`create-x509`).
+2. **Zero Organization Policy Conflicts**: Because Google STS evaluates X.509 certificates internally within Google Cloud IAM, there is no requirement to host unauthenticated public OIDC discovery endpoints (`/.well-known/jwks.json`). This works seamlessly even in enterprise organizations with strict Domain Restricted Sharing (`iam.allowedPolicyMemberDomains`).
+3. **Official Google SDK Integration**: Python's `google-auth` library (`load_credentials_from_file`) natively reads `client_config.json` generated by `gcloud iam workload-identity-pools create-cred-config` and executes the mTLS token exchange automatically.
 
 ---
 
@@ -68,14 +53,12 @@ The authentication pipeline eliminates static credentials by establishing a cryp
 
 ```text
 .
-├── setup_pki.sh            # Generates mock Root CA, server certs, and client cert (CN=client-01)
-├── deploy_gcp.sh           # Automates Cloud Run deploy, WIF Pool/Provider setup, and IAM bindings
-├── client.py               # End-to-end Python client testing mTLS, STS exchange, IAM impersonation, and GCS
-├── requirements.txt        # Root workspace dependencies (for local testing & client script)
-└── broker/                 # Cloud Run mTLS Token Broker Service
-    ├── app.py              # Flask WSGI application implementing OIDC discovery and signJwt broker
-    ├── Dockerfile          # Least-privilege container packaging (non-root execution, Gunicorn)
-    └── requirements.txt    # Broker container Python dependencies
+├── setup_cas.sh            # Provisions GCP Certificate Authority Service (CAS) and formats trust_store.yaml
+├── cleanup_cas.sh          # Safely disables and deletes GCP CAS resources after testing
+├── setup_pki.sh            # Alternative: Generates local OpenSSL mock Root CA and trust_store.yaml
+├── deploy_gcp.sh           # Automates WIF Pool, X.509 Provider setup, IAM bindings, and cred config
+├── client.py               # End-to-end Python client demonstrating GA X.509 WIF mTLS and GCS access
+└── requirements.txt        # Root workspace Python dependencies (google-auth, cryptography, requests)
 ```
 
 ---
@@ -85,81 +68,70 @@ The authentication pipeline eliminates static credentials by establishing a cryp
 ### Prerequisites
 - **Google Cloud SDK (`gcloud`)** installed and authenticated (`gcloud auth login`).
 - **Python 3.11+** and **OpenSSL** installed locally.
-- A Google Cloud Project with billing enabled.
+- A Google Cloud Project with billing and **Certificate Authority Service (CAS)** enabled.
 
-### Step 1: Generate Mock PKI Certificates
-Run the automated OpenSSL script to generate the Root CA, broker server certificate, and authenticated client certificate (`CN=client-01`):
+### Step 1: Provision PKI Hierarchy & Trust Store
+Run the automated CAS script to provision a DevOps-tier CA Pool, create a Root CA in Google Cloud CAS, generate a local client private key, format `trust_store.yaml`, and submit a Certificate Signing Request (CSR) to CAS to issue the client certificate (`CN=client-01`):
 
 ```bash
-chmod +x setup_pki.sh deploy_gcp.sh
-./setup_pki.sh
+chmod +x setup_cas.sh cleanup_cas.sh deploy_gcp.sh
+./setup_cas.sh <YOUR_GCP_PROJECT_ID> us-central1
 ```
 
+*(Alternative: If you prefer offline testing without GCP CAS, run `./setup_pki.sh` to generate OpenSSL certificates).*
+
 *Output files generated:*
-- `rootCA.pem` / `rootCA.key`: Self-signed Root Certificate Authority (valid for 10 years).
-- `server.pem` / `server.key`: Server certificate for local broker HTTPS/mTLS testing.
-- `client.pem` / `client.key`: Client certificate with Subject Common Name `CN=client-01`.
+- `rootCA.pem`: Exported public certificate of the Root CA.
+- `trust_store.yaml`: Formatted YAML trust store specification required by GA WIF X.509.
+- `client.key`: Local client RSA private key (with strict `600` permissions).
+- `client.pem`: Client certificate signed by the Root CA asserting `CN=client-01`.
 
 ---
 
-### Step 2: Local Development & Integration Testing (Offline Mode)
-You can test the entire certificate validation, CN extraction, and JWT signing pipeline locally without touching live GCP infrastructure by enabling `LOCAL_DEV_MODE`:
+### Step 2: Configure Workload Identity Federation (GA X.509)
+Configure the Workload Identity Pool, X.509 Provider, Target Service Account, and IAM bindings in your GCP project:
 
-1. **Install Python Dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+./deploy_gcp.sh <YOUR_GCP_PROJECT_ID> us-central1
+```
 
-2. **Start the Broker locally**:
-   ```bash
-   export LOCAL_DEV_MODE=true
-   export PORT=8080
-   python3 -m gunicorn --bind 127.0.0.1:8080 broker.app:app
-   ```
-   *(Note: In `LOCAL_DEV_MODE`, the broker generates an ephemeral in-memory RSA key pair to sign tokens and serve JWKS locally).*
-
-3. **Run the Client Script against Local Broker**:
-   In a new terminal window:
-   ```bash
-   python3 client.py --local-dev
-   ```
-   *The client will perform the mTLS handshake, present `client.pem`, receive a signed OIDC ID token, and decode/print the verified claims (`sub: client-01`).*
+*This script automatically:*
+- Enables required GCP APIs (`iam`, `iamcredentials`, `sts`, `storage`, `privateca`).
+- Creates `wif-target-sa` (with `storage.objectViewer` role on a test GCS bucket).
+- Creates WIF Pool `demo-cert-pool` and GA X.509 Provider `demo-cert-provider` using `trust_store.yaml`.
+- Binds `roles/iam.workloadIdentityUser` to `principal://.../subject/client-01`.
+- Generates `client_config.json` via `gcloud iam workload-identity-pools create-cred-config`.
 
 ---
 
-### Step 3: Live Google Cloud Deployment & WIF Federation
-Deploy the token broker to Cloud Run and configure Workload Identity Federation in your GCP project:
+### Step 3: Execute Full End-to-End WIF Verification
+Run the Python verification script:
 
-1. **Execute Deployment Script**:
-   ```bash
-   ./deploy_gcp.sh <YOUR_GCP_PROJECT_ID> us-central1
-   ```
-   *This script automatically:*
-   - Enables required GCP APIs (`iam`, `iamcredentials`, `sts`, `run`, `storage`).
-   - Creates `broker-sa` (with `serviceAccountTokenCreator` role on itself for `signJwt`).
-   - Creates `wif-target-sa` (with `storage.objectViewer` role on a test GCS bucket).
-   - Deploys `broker/` to Google Cloud Run.
-   - Creates WIF Pool `demo-cert-pool` and OIDC Provider `demo-cert-provider` pointing to the Cloud Run URL.
-   - Binds `roles/iam.workloadIdentityUser` to `principal://.../subject/client-01`.
-   - Generates `client_config.json` containing all deployed endpoints and resource IDs.
+```bash
+python3 client.py --config client_config.json
+```
 
-2. **Execute Full End-to-End WIF Verification**:
-   ```bash
-   python3 client.py --config client_config.json
-   ```
-   *The client will execute the complete 4-step pipeline:*
-   - **Step 1**: Authenticate to Cloud Run via X.509 certificate -> receive OIDC ID token.
-   - **Step 2**: Exchange OIDC token at Google STS (`https://sts.googleapis.com/v1/token`) -> receive GCP Federated Access Token.
-   - **Step 3**: Impersonate `wif-target-sa` via IAM Credentials API -> receive GCP OAuth 2.0 Access Token.
-   - **Step 4**: Query Google Cloud Storage API -> successfully list objects in the test bucket!
+*The client will execute the complete GA X.509 authentication pipeline:*
+- **Step 1**: `google-auth` presents `client.pem` and `client.key` over mTLS directly to Google STS (`https://sts.googleapis.com/v1/token`), exchanges for a federated token, and impersonates `wif-target-sa`!
+- **Step 2**: Queries Google Cloud Storage API -> successfully lists objects in the test bucket!
+
+*(Note: To verify your certificate cryptographic chain offline locally without touching GCP network APIs, run `python3 client.py --local-dev`).*
+
+---
+
+### Step 4: Resource Cleanup (Remove CAS CAs)
+After completing validation, remove all generated Certificate Authorities and CA Pools to prevent lingering resources or ongoing cloud charges:
+
+```bash
+./cleanup_cas.sh <YOUR_GCP_PROJECT_ID> us-central1
+```
 
 ---
 
 ## 🔒 Security Controls & Compliance
 
-This PoC strictly adheres to Google Cloud Security best practices and **Mandatory Secure Web Skills**:
+This codebase strictly adheres to Google Cloud Security best practices and **Mandatory Secure Web Skills**:
 - **Zero Stored Secrets**: No private keys, JWT secrets, or API tokens are hardcoded or stored on disk.
-- **Strict Input Sanitization**: Certificate Subject CNs are validated against an alphanumeric allow-list regex (`^[a-zA-Z0-9._-]+$`) to prevent claims injection.
-- **Least Privilege Execution**: The Docker container executes under a dedicated non-root user (`brokeruser`, UID 1000). Service accounts are strictly segregated by role.
-- **Hardened HTTP Headers**: All broker responses enforce `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy: default-src 'none'`, and `Cache-Control: no-store`.
-- **Diagnostic Logging**: Server and client logs provide clear audit trails without leaking bearer tokens or private cryptographic material.
+- **Strict Key Isolation**: Client private keys (`client.key`) are generated locally with `600` permissions and never leave the client environment. Only CSRs (`client.csr`) are sent to CAS for signing.
+- **Least Privilege RBAC**: Service accounts and Workload Identity Pool principals are strictly scoped to the exact Common Name (`subject/client-01`) and required IAM roles.
+- **Diagnostic Logging**: Client logs provide clear diagnostic audit trails without leaking bearer tokens or private cryptographic material.

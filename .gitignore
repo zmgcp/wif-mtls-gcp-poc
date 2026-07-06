@@ -16,5 +16,6 @@ certs/
 
 # Local deployment configuration & logs
 client_config.json
+trust_store.yaml
 *.log
 demo_object.txt
