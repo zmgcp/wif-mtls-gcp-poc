@@ -1,0 +1,20 @@
+# Python virtual environments
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+
+# PKI certificates, private keys, and CSRs (Mandatory Secure Web Skills: Never commit secrets/keys)
+*.key
+*.pem
+*.csr
+*.cnf
+*.srl
+certs/
+
+# Local deployment configuration & logs
+client_config.json
+*.log
+demo_object.txt
