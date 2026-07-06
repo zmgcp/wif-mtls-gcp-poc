@@ -84,12 +84,13 @@ chmod 600 "${CERTS_DIR}/client.key"
 chmod 644 "${CERTS_DIR}/client.pem"
 rm -f "${CERTS_DIR}/client.csr" "${CERTS_DIR}/client_ext.cnf" "${CERTS_DIR}/rootCA.srl"
 
-# Format rootCA.pem with 6-space indentation for YAML trust store specification
+# Strip empty/whitespace lines to prevent PEM validation errors in WIF
+sed -i '/^[[:space:]]*$/d' "${CERTS_DIR}/rootCA.pem"
 ROOT_CERT_INDENTED=$(sed 's/^/      /' "${CERTS_DIR}/rootCA.pem")
 cat <<EOF > "${CERTS_DIR}/trust_store.yaml"
 trustStore:
   trustAnchors:
-  - pemCertificate: |
+  - pemCertificate: |-
 ${ROOT_CERT_INDENTED}
 EOF
 

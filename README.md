@@ -98,7 +98,7 @@ Configure the Workload Identity Pool, X.509 Provider, Target Service Account, an
 *This script automatically:*
 - Enables required GCP APIs (`iam`, `iamcredentials`, `sts`, `storage`, `privateca`).
 - Creates `wif-target-sa` (with `storage.objectViewer` role on a test GCS bucket).
-- Creates WIF Pool `demo-cert-pool` and GA X.509 Provider `demo-cert-provider` using `trust_store.yaml`.
+- Creates WIF Pool `demo-cert-pool` and GA X.509 Provider `demo-x509-provider` using `trust_store.yaml`.
 - Binds `roles/iam.workloadIdentityUser` to `principal://.../subject/client-01`.
 - Generates `client_config.json` via `gcloud iam workload-identity-pools create-cred-config`.
 

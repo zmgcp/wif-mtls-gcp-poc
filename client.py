@@ -117,12 +117,28 @@ def main():
         from google.auth import load_credentials_from_file
         from google.auth.transport.requests import Request as GCPRequest
 
-        credentials, project = load_credentials_from_file(config_path)
+        # Ensure default certificate config is found if use_default_certificate_config is true
+        possible_cert_configs = [
+            os.path.expanduser("~/.config/gcloud/certificate_config.json"),
+            "/usr/local/google/home/zachml/.config/gcloud/certificate_config.json",
+        ]
+        for cfg_path in possible_cert_configs:
+            if os.path.exists(cfg_path):
+                os.environ["GOOGLE_API_CERTIFICATE_CONFIG"] = cfg_path
+                logger.info(f"  Using certificate config: {cfg_path}")
+                break
+
+        credentials, project = load_credentials_from_file(
+            config_path,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
         auth_req = GCPRequest()
         
         # Trigger native mTLS token exchange against Google STS & impersonation
         credentials.refresh(auth_req)
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         logger.error(f"[Step 1 FAILED] Could not authenticate via GA WIF X.509 federation: {e}")
         logger.error("Troubleshooting: Verify that trust_store.yaml in your X.509 WIF provider matches rootCA.pem.")
         sys.exit(1)
@@ -138,7 +154,11 @@ def main():
         config_data = json.load(f)
     
     # Infer bucket name from project ID or argument
-    project_id = config_data.get("audience", "").split("/projects/")[1].split("/")[0] if "/projects/" in config_data.get("audience", "") else ""
+    sa_email = getattr(credentials, 'service_account_email', '') or config_data.get("service_account_impersonation_url", "")
+    if "@" in sa_email and ".iam.gserviceaccount.com" in sa_email:
+        project_id = sa_email.split("@")[1].split(".iam.gserviceaccount.com")[0]
+    else:
+        project_id = config_data.get("audience", "").split("/projects/")[1].split("/")[0] if "/projects/" in config_data.get("audience", "") else ""
     bucket_name = args.bucket or f"demo-wif-mtls-{project_id}" if project_id else ""
 
     if not bucket_name:

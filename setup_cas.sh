@@ -5,7 +5,7 @@
 # This script provisions a PKI hierarchy using Google Cloud CAS for GA WIF X.509:
 # 1. Enables privateca.googleapis.com API.
 # 2. Creates a DevOps-tier CA Pool (optimized for testing/ephemeral certs).
-# 3. Creates and enables a Root CA in GCP CAS.
+# 3. Creates, undeletes (if in soft-delete), and enables a Root CA in GCP CAS.
 # 4. Exports the Root CA public certificate to rootCA.pem and formats trust_store.yaml.
 # 5. Generates a client RSA private key locally and submits a CSR to CAS.
 # 6. Outputs the CAS-signed client certificate (client.pem).
@@ -45,9 +45,12 @@ else
     echo "CA Pool '${CA_POOL_NAME}' already exists."
 fi
 
-# 3. Create Root CA
-echo "[Step 3/6] Creating and enabling Root CA '${ROOT_CA_NAME}'..."
-if ! gcloud privateca roots describe "${ROOT_CA_NAME}" --pool="${CA_POOL_NAME}" --location="${REGION}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+# 3. Create or Restore Root CA
+echo "[Step 3/6] Configuring Root CA '${ROOT_CA_NAME}'..."
+CA_STATE=$(gcloud privateca roots describe "${ROOT_CA_NAME}" --pool="${CA_POOL_NAME}" --location="${REGION}" --project="${PROJECT_ID}" --format="value(state)" 2>/dev/null || echo "NOT_FOUND")
+
+if [[ "${CA_STATE}" == "NOT_FOUND" ]]; then
+    echo "Creating Root CA..."
     gcloud privateca roots create "${ROOT_CA_NAME}" \
         --pool="${CA_POOL_NAME}" \
         --location="${REGION}" \
@@ -57,16 +60,17 @@ if ! gcloud privateca roots describe "${ROOT_CA_NAME}" --pool="${CA_POOL_NAME}" 
         --project="${PROJECT_ID}" \
         --quiet
     echo "Root CA created successfully."
+elif [[ "${CA_STATE}" == "DELETED" ]]; then
+    echo "Root CA is currently DELETED (in soft-delete grace period). Undeleting..."
+    gcloud privateca roots undelete "${ROOT_CA_NAME}" --pool="${CA_POOL_NAME}" --location="${REGION}" --project="${PROJECT_ID}" --quiet
+    echo "Enabling Root CA..."
+    gcloud privateca roots enable "${ROOT_CA_NAME}" --pool="${CA_POOL_NAME}" --location="${REGION}" --project="${PROJECT_ID}" --quiet
+elif [[ "${CA_STATE}" == "DISABLED" ]] || [[ "${CA_STATE}" == "STAGED" ]]; then
+    echo "Root CA is currently ${CA_STATE}. Enabling Root CA..."
+    gcloud privateca roots enable "${ROOT_CA_NAME}" --pool="${CA_POOL_NAME}" --location="${REGION}" --project="${PROJECT_ID}" --quiet
 else
-    echo "Root CA '${ROOT_CA_NAME}' already exists."
+    echo "Root CA is in state: ${CA_STATE}."
 fi
-
-# Ensure Root CA is enabled
-gcloud privateca roots enable "${ROOT_CA_NAME}" \
-    --pool="${CA_POOL_NAME}" \
-    --location="${REGION}" \
-    --project="${PROJECT_ID}" \
-    --quiet 2>/dev/null || true
 
 # 4. Export Root CA Certificate & Format trust_store.yaml
 echo "[Step 4/6] Exporting Root CA certificate and formatting trust_store.yaml..."
@@ -76,12 +80,13 @@ gcloud privateca roots describe "${ROOT_CA_NAME}" \
     --project="${PROJECT_ID}" \
     --format="value(pemCaCertificates[0])" > rootCA.pem
 
-# Format rootCA.pem with 6-space indentation for YAML trust store specification
+# Strip empty/whitespace lines to prevent PEM validation errors in WIF
+sed -i '/^[[:space:]]*$/d' rootCA.pem
 ROOT_CERT_INDENTED=$(sed 's/^/      /' rootCA.pem)
 cat <<EOF > trust_store.yaml
 trustStore:
   trustAnchors:
-  - pemCertificate: |
+  - pemCertificate: |-
 ${ROOT_CERT_INDENTED}
 EOF
 

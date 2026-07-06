@@ -39,7 +39,7 @@ retry_cmd() {
 PROJECT_ID="${1:-$(gcloud config get-value project 2>/dev/null || echo '')}"
 REGION="${2:-us-central1}"
 POOL_ID="${3:-demo-cert-pool}"
-PROVIDER_ID="${4:-demo-cert-provider}"
+PROVIDER_ID="${4:-demo-x509-provider}"
 TARGET_SA_NAME="${5:-wif-target-sa}"
 
 if [[ -z "${PROJECT_ID}" ]]; then
