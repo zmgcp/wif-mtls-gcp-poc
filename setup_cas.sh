@@ -93,6 +93,9 @@ EOF
 echo "Exported Root CA to rootCA.pem and generated trust_store.yaml."
 
 # 5. Generate Client Key and CSR Locally
+# Set restrictive umask before key generation to prevent race condition
+# where private keys are briefly world-readable before chmod is applied
+umask 077
 echo "[Step 5/6] Generating local client RSA private key and Certificate Signing Request (CSR)..."
 openssl req -new -newkey rsa:2048 -nodes \
     -keyout client.key \

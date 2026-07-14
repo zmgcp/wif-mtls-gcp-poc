@@ -120,7 +120,6 @@ def main():
         # Ensure default certificate config is found if use_default_certificate_config is true
         possible_cert_configs = [
             os.path.expanduser("~/.config/gcloud/certificate_config.json"),
-            "/usr/local/google/home/zachml/.config/gcloud/certificate_config.json",
         ]
         for cfg_path in possible_cert_configs:
             if os.path.exists(cfg_path):

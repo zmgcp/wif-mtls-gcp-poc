@@ -22,6 +22,9 @@ echo "Starting Mock PKI Generation in: ${CERTS_DIR}"
 echo "=============================================================================="
 
 # 1. Generate Root CA Private Key and Self-Signed Certificate
+# Set restrictive umask before key generation to prevent race condition
+# where private keys are briefly world-readable before chmod is applied
+umask 077
 echo "[Step 1/3] Generating Root CA (rootCA.key, rootCA.pem)..."
 openssl req -x509 -new -nodes \
     -keyout "${CERTS_DIR}/rootCA.key" \
